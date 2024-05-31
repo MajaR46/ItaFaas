@@ -10,6 +10,7 @@ provider:
   environment:
     TICKETS_TABLE: ${self:service}-events
     UPLOAD_BUCKET: ${self:service}-uploads
+    JWT_SECRET_KEY:  faas_key_ita
 
 plugins:
   - serverless-offline

@@ -1,5 +1,7 @@
 const AWS = require('aws-sdk');
 const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken');
+
 
 // Configure AWS SDK to use LocalStack
 const dynamoDB = new AWS.DynamoDB.DocumentClient({
@@ -7,8 +9,43 @@ const dynamoDB = new AWS.DynamoDB.DocumentClient({
   endpoint: 'http://127.0.0.1:4566',
 });
 
+const verifyToken = (token) => {
+  return new Promise((resolve, reject) => {
+    jwt.verify(token, process.env.JWT_SECRET_KEY, (err, decoded) =>{
+      if(err){
+        reject(err)
+      }else{
+        resolve(decoded)
+      }
+    })
+  })
+}
+const extractToken = (headers) => {
+  const authHeader = headers.Authorization || headers.authorization;
+  if (!authHeader) {
+    throw new Error('Authorization header is missing');
+  }
+  const token = authHeader.split(' ')[1];
+  if (!token) {
+    throw new Error('Token is missing');
+  }
+  return token;
+};
+
+const payload = {
+  userId: '123456',
+  name: 'John Doe',
+};
+const secret = 'faas_key_ita';
+const token = jwt.sign(payload, secret, { expiresIn: '1h' });
+console.log('Generated JWT Token:', token);
+
+
 module.exports.createTicket = async (event) => {
   console.log('Received event:', event);
+
+  const token = extractToken(event.headers);
+  await verifyToken(token)
 
   const body = JSON.parse(event.body);
   console.log('Parsed body:', body);
@@ -41,7 +78,10 @@ module.exports.createTicket = async (event) => {
   }
 };
 
-module.exports.getTickets = async () => {
+module.exports.getTickets = async (event) => {
+  const token = extractToken(event.headers);
+  await verifyToken(token)
+
   const params = {
     TableName: process.env.TICKETS_TABLE,
   };
@@ -65,6 +105,10 @@ module.exports.getTickets = async () => {
 };
 
 module.exports.getTicket = async (event) => {
+
+  const token = extractToken(event.headers);
+  await verifyToken(token)
+
   const params = {
     TableName: process.env.TICKETS_TABLE,
     Key: {
@@ -91,13 +135,22 @@ module.exports.getTicket = async (event) => {
 };
 
 module.exports.updateTicket = async (event) => {
+
+  const token = extractToken(event.headers);
+  await verifyToken(token)
+
   const body = JSON.parse(event.body);
   const params = {
     TableName: process.env.TICKETS_TABLE,
     Key: {
       id: event.pathParameters.id,
     },
-    UpdateExpression: 'set event = :event, location = :location, date = :date',
+    UpdateExpression: 'set #event = :event, #location = :location, #date = :date',
+    ExpressionAttributeNames: {
+      '#event': 'event',
+      '#location': 'location',
+      '#date': 'date',
+    },
     ExpressionAttributeValues: {
       ':event': body.event,
       ':location': body.location,
@@ -124,7 +177,12 @@ module.exports.updateTicket = async (event) => {
   }
 };
 
+
 module.exports.deleteTicket = async (event) => {
+  const token = extractToken(event.headers);
+  await verifyToken(token)
+
+
   const params = {
     TableName: process.env.TICKETS_TABLE,
     Key: {
