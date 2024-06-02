@@ -1,25 +1,27 @@
 const AWS = require('aws-sdk');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer-mock');
 
-
-// Configure AWS SDK to use LocalStack
 const dynamoDB = new AWS.DynamoDB.DocumentClient({
   region: 'us-east-1',
   endpoint: 'http://127.0.0.1:4566',
 });
 
+
+
 const verifyToken = (token) => {
   return new Promise((resolve, reject) => {
-    jwt.verify(token, process.env.JWT_SECRET_KEY, (err, decoded) =>{
-      if(err){
-        reject(err)
-      }else{
-        resolve(decoded)
+    jwt.verify(token, process.env.JWT_SECRET_KEY, (err, decoded) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(decoded);
       }
-    })
-  })
-}
+    });
+  });
+};
+
 const extractToken = (headers) => {
   const authHeader = headers.Authorization || headers.authorization;
   if (!authHeader) {
@@ -40,15 +42,11 @@ const secret = 'faas_key_ita';
 const token = jwt.sign(payload, secret, { expiresIn: '1h' });
 console.log('Generated JWT Token:', token);
 
-
 module.exports.createTicket = async (event) => {
-  console.log('Received event:', event);
-
   const token = extractToken(event.headers);
-  await verifyToken(token)
+  await verifyToken(token);
 
   const body = JSON.parse(event.body);
-  console.log('Parsed body:', body);
 
   const params = {
     TableName: process.env.TICKETS_TABLE,
@@ -60,11 +58,12 @@ module.exports.createTicket = async (event) => {
     },
   };
 
-  console.log('DynamoDB put params:', params);
-
   try {
     await dynamoDB.put(params).promise();
     console.log('Ticket created successfully');
+
+    await processAndStoreTicket(params.Item);
+
     return {
       statusCode: 200,
       body: JSON.stringify({ message: 'Ticket created successfully' }),
@@ -80,17 +79,16 @@ module.exports.createTicket = async (event) => {
 
 module.exports.getTickets = async (event) => {
   const token = extractToken(event.headers);
-  await verifyToken(token)
+  await verifyToken(token);
 
   const params = {
     TableName: process.env.TICKETS_TABLE,
   };
 
-  console.log('DynamoDB scan params:', params);
 
   try {
     const data = await dynamoDB.scan(params).promise();
-    console.log('Tickets retrieved successfully:', data.Items);
+    await sendEmail('Tickets Retrieved', 'The tickets have been retrieved successfully.');
     return {
       statusCode: 200,
       body: JSON.stringify(data.Items),
@@ -105,9 +103,8 @@ module.exports.getTickets = async (event) => {
 };
 
 module.exports.getTicket = async (event) => {
-
   const token = extractToken(event.headers);
-  await verifyToken(token)
+  await verifyToken(token);
 
   const params = {
     TableName: process.env.TICKETS_TABLE,
@@ -116,11 +113,10 @@ module.exports.getTicket = async (event) => {
     },
   };
 
-  console.log('DynamoDB get params:', params);
-
   try {
     const data = await dynamoDB.get(params).promise();
-    console.log('Ticket retrieved successfully:', data.Item);
+    await sendEmail('One ticket Retrieved', 'The ticket has been retrieved successfully.');
+  
     return {
       statusCode: 200,
       body: JSON.stringify(data.Item),
@@ -135,9 +131,8 @@ module.exports.getTicket = async (event) => {
 };
 
 module.exports.updateTicket = async (event) => {
-
   const token = extractToken(event.headers);
-  await verifyToken(token)
+  await verifyToken(token);
 
   const body = JSON.parse(event.body);
   const params = {
@@ -163,7 +158,7 @@ module.exports.updateTicket = async (event) => {
 
   try {
     const data = await dynamoDB.update(params).promise();
-    console.log('Ticket updated successfully:', data.Attributes);
+    await sendEmail('Tickets Updated', 'The tickets have been updated successfully.');
     return {
       statusCode: 200,
       body: JSON.stringify(data.Attributes),
@@ -177,11 +172,9 @@ module.exports.updateTicket = async (event) => {
   }
 };
 
-
 module.exports.deleteTicket = async (event) => {
   const token = extractToken(event.headers);
-  await verifyToken(token)
-
+  await verifyToken(token);
 
   const params = {
     TableName: process.env.TICKETS_TABLE,
@@ -194,7 +187,7 @@ module.exports.deleteTicket = async (event) => {
 
   try {
     await dynamoDB.delete(params).promise();
-    console.log('Ticket deleted successfully');
+    await sendEmail('Tickets Deleted', 'The ticket has been deleted successfully.');
     return {
       statusCode: 200,
       body: JSON.stringify({ message: 'Ticket deleted successfully' }),
@@ -207,3 +200,138 @@ module.exports.deleteTicket = async (event) => {
     };
   }
 };
+
+///////////////////////////////MOCK EMAIL /////////////////////////
+const sendEmail = async (subject,text) => {
+  let transporter = nodemailer.createTransport({
+    host: 'smtp.ethereal.email',
+    port: 587,
+    secure: false,
+    auth: {
+      user: 'christophe.krajcik@ethereal.email',
+      pass: 'tr6DsxPeugeAE55V2H'
+    }
+  });
+
+  let info = await transporter.sendMail({
+    from: 'christophe.krajcik@ethereal.email',
+    to: 'christophe.krajcik@ethereal.email',
+    subject: subject,
+    text: text,
+  });
+  console.log('Message sent: %s', info.messageId);
+
+  const mockSentMessages = nodemailer.mock.getSentMail();
+  const sentMessage = mockSentMessages[mockSentMessages.length - 1];
+
+  console.log('Message subject : %s', sentMessage.subject)
+  console.log('Message text: %s', sentMessage.text);
+};
+
+///////////////NA URO TI IZPIŠE KOLKO JE TICKETOV //////////////////
+module.exports.hourlyTask = async () => {
+  try {
+    const params = {
+      TableName: process.env.TICKETS_TABLE,
+    };
+
+    const data = await dynamoDB.scan(params).promise();
+    const totalTickets = data.Count || 0;
+
+    console.log('Total tickets:', totalTickets);
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: 'Hourly task executed successfully', totalTickets }),
+    };
+  } catch (error) {
+    console.error('Error in hourly task:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message }),
+    };
+  }
+};
+
+
+////////////////////////////SQS MESSAGE DEMO/////////////////////
+
+module.exports.handleSQSMessage = async (event) => {
+  console.log('SQS Event:', JSON.stringify(event, null, 2));
+  for (const record of event.Records) {
+    const messageBody = record.body;
+    console.log(`Received SQS message: ${messageBody}`);
+    // Process the message as needed
+  }
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ message: 'SQS message processed successfully' }),
+  };
+};
+
+module.exports.triggerHandleSQSMessage = async (event) => {
+  //  mock SQS event
+  const mockSQSEvent = {
+    Records: [
+      {
+        messageId: '1',
+        receiptHandle: 'MessageReceiptHandle',
+        body: JSON.stringify({
+          exampleKey: 'exampleValue'
+        }),
+        attributes: {
+          ApproximateReceiveCount: '1',
+          SentTimestamp: '1523232000000',
+          SenderId: '123456789012',
+          ApproximateFirstReceiveTimestamp: '1523232000001'
+        },
+        messageAttributes: {},
+        md5OfBody: '098f6bcd4621d373cade4e832627b4f6',
+        eventSource: 'aws:sqs',
+        eventSourceARN: 'arn:aws:sqs:us-east-1:123456789012:MyQueue',
+        awsRegion: 'us-east-1'
+      }
+    ]
+  };
+
+  try {
+    const response = await module.exports.handleSQSMessage(mockSQSEvent);
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: 'Triggered handleSQSMessage successfully', response }),
+    };
+  } catch (error) {
+    console.error('Error triggering handleSQSMessage:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message }),
+    };
+  }
+};
+
+
+////////////////////////////////// TRIGGERED AFTER TICKET IS CREATED //////////
+const processAndStoreTicket = async (ticket) => {
+
+  const processedData = {
+    id: ticket.id,
+    processedEvent: ticket.event.toUpperCase(),
+    processedLocation: ticket.location.toLowerCase(), 
+    processedDate: new Date(ticket.date).toISOString(), 
+  };
+  console.log('Processed ticket data:', processedData);
+  
+  await storeProcessedData(processedData);
+};
+
+const storeProcessedData = async (data) => {
+  const params = {
+    TableName: process.env.TICKETS_TABLE, 
+    Item: data,
+  };
+  
+  await dynamoDB.put(params).promise();
+  console.log('Processed data stored successfully');
+};
+
+
